@@ -26,6 +26,7 @@ class Scanner():
         self._base = base_path
         self._failed = set()
         self._flac_exe = [flac_exe]
+        self.failed = []
 
         # Test flac install
         cmd = self._flac_exe + FLAC_VERSION
@@ -62,6 +63,7 @@ class Scanner():
                     file_path = os.path.join(root, f)
                     if not self._check_file(file_path):
                         logger.warning("Failed to verify '%s'", f)
+                        self.failed.append(file_path)
                 else:
                     logger.debug("Skipping '%s'", f)
 
@@ -69,14 +71,18 @@ class Scanner():
 ### CLI Commands ###
 
 @click.group()
-def cli():
+@click.option('--quiet', is_flag=True)
+def cli(quiet):
 
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    if not quiet:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.addHandler(logging.NullHandler())
 
 @cli.command()
 @click.argument('base_path', type=click.Path(exists=True, readable=True, resolve_path=True))
@@ -86,6 +92,10 @@ def scan(base_path):
     click.echo(f"Scanning {base_path}...")
     scanner = Scanner(base_path)
     scanner.scan()
+    click.echo("Failed files:")
+    for path in scanner.failed:
+        click.echo(path)
+
 
 ### Entry Point ###
 if __name__ == "__main__":
