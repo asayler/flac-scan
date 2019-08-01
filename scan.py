@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
+import concurrent.futures
 import logging
 import os
 import subprocess
+import time
 
 import click
-
 
 
 FLAC_EXTS = ["flac"]
@@ -24,9 +25,11 @@ class Scanner():
 
         # Setup Class
         self._base = base_path
-        self._failed = set()
         self._flac_exe = [flac_exe]
-        self.failed = []
+        self._files = []
+        self._failed = []
+        self._passed = []
+        self._total_cnt = 0
 
         # Test flac install
         cmd = self._flac_exe + FLAC_VERSION
@@ -53,19 +56,35 @@ class Scanner():
         except FileNotFoundError:
             raise OSError(f"Could not find '{self._flac_exe[0]}'. Is it installed?")
 
-    def scan(self):
+    def _preload(self):
 
         for root, dirs, files in os.walk(self._base):
             logger.info("Traversing '%s'", root)
             for f in files:
+                self._total_cnt += 1
                 if os.path.splitext(f)[1][1:].lower() in FLAC_EXTS:
-                    logger.info("Scanning '%s'", f)
+                    logger.info("Adding '%s'", f)
                     file_path = os.path.join(root, f)
-                    if not self._check_file(file_path):
-                        logger.warning("Failed to verify '%s'", f)
-                        self.failed.append(file_path)
+                    self._files.append(file_path)
                 else:
-                    logger.debug("Skipping '%s'", f)
+                    logger.debug("Ignoring '%s'", f)
+
+    def scan(self, workers=None):
+
+        self._preload()
+
+        if not workers:
+            workers=os.cpu_count()
+
+        logger.info(f"Scanning with {workers} workers")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            start = time.perf_counter()
+            for path, test in zip(self._files, executor.map(self._check_file, self._files)):
+                if test:
+                    self._passed.append(path)
+                else:
+                    self._failed.append(path)
+        logger.info(f"Completed run in {time.perf_counter()-start:.2f} seconds")
 
 
 ### CLI Commands ###
@@ -86,15 +105,30 @@ def cli(quiet):
 
 @cli.command()
 @click.argument('base_path', type=click.Path(exists=True, readable=True, resolve_path=True))
-def scan(base_path):
+@click.option('--output', default=None, type=click.Path(writable=True, resolve_path=True))
+@click.option('--workers', default=os.cpu_count(), type=click.INT)
+def scan(base_path, output, workers):
     '''Scan a directory for flac file corruption'''
 
     click.echo(f"Scanning {base_path}...")
     scanner = Scanner(base_path)
-    scanner.scan()
-    click.echo("Failed files:")
-    for path in scanner.failed:
-        click.echo(path)
+
+    scanner.scan(workers=workers)
+
+    click.echo(f"Traversed {scanner._total_cnt} total files")
+    click.echo(f"Scanned {len(scanner._files)} flac files")
+    click.echo(f"Passed {len(scanner._passed)} flac files")
+    click.echo(f"Failed {len(scanner._failed)} flac files")
+
+    if not output:
+        click.echo("Failed files:")
+        for path in scanner._failed:
+            click.echo(path)
+    else:
+        click.echo(f"Writing failed file list to {output}")
+        with open(output, 'w') as out:
+            for path in scanner._failed:
+                out.write(f"{path}\n")
 
 
 ### Entry Point ###
